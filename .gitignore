@@ -1,31 +1,45 @@
+# -----------------------
 # Python
+# -----------------------
 __pycache__/
 *.pyc
 *.pyo
+*.pyd
 
+# -----------------------
 # Virtual environments
+# -----------------------
 env/
 venv/
 .venv/
 
+# -----------------------
 # macOS
+# -----------------------
 .DS_Store
 
+# -----------------------
 # Prefect
+# -----------------------
 .prefect/
 *.sqlite
 *.db
-logs/          # Prefect or custom logs
+logs/        
 
+# -----------------------
 # Airflow
-airflow.db
-logs/          # Airflow DAG logs
+# -----------------------
+airflow/airflow.db      
+airflow/logs/    
+airflow/config/
+airflow/*.cfg           
+airflow/*.ini                 
+airflow/docker-compose.yaml   
 
+airflow/dags/*.log
+
+# -----------------------
 # AWS / secrets
+# -----------------------
 *.env
 *.aws
-
-# Docker
-airflow/logs
-airflow/config
-airflow/docker-compose.yaml

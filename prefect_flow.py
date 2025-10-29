@@ -1,182 +1,172 @@
-# prefect flow goes here
-from prefect import task, flow, get_run_logger
-import requests
+# prefect-flow.py
+
+from prefect import flow, task
 import boto3
+import requests
 import time
 
-queue_url = 'https://sqs.us-east-1.amazonaws.com/440848399208/vzu3vu'
 
 @task
-def populate_data():
-    """
-    This task sends a POST request to an API endpoint to 
-    to populate the SQS queue with 21 messages
-    """
+def populate_queue():
+    """Populate SQS queue using API"""
+    url = "https://j9y2xa0vx0.execute-api.us-east-1.amazonaws.com/api/scatter/vzu3vu"
+    payload = requests.post(url).json()
+    print(f"API Response: {payload}")
 
-    logger = get_run_logger()
+    sqs_url = payload.get("sqs_url")
+    if not sqs_url:
+        raise ValueError(f"API did not return 'sqs_url': {payload}")
 
-    try:
-        url = "https://j9y2xa0vx0.execute-api.us-east-1.amazonaws.com/api/scatter/vzu3vu"
-        response = requests.post(url)
-        response.raise_for_status()
-        payload = response.json()
+    print(f"SQS Queue URL: {sqs_url}")
+    return sqs_url
 
-        sqs_url = payload.get("sqs_url")
-        if sqs_url:
-            logger.info(f"Data fetched successfully from {sqs_url}.")
-        else:
-            logger.warning("No SQS URL found in response payload.")
-        return payload
-
-    except requests.exceptions.RequestException as e:
-        logger.error(f"HTTP error occurred: {e}")
-        return None
-    
-@task
-def get_queue_attributes():
-    """
-    This task monitors the messages from SQS queue and 
-    logs the number of messages available.
-    """
-
-    logger = get_run_logger()
-    sqs = boto3.client('sqs',region_name='us-east-1')
-    elapsed = 0
-    logger.info("Waiting for SQS queue to be available...")
-
-    while elapsed < 60:  # Wait for up to 60 seconds
-        try:
-            response = sqs.get_queue_attributes(
-                QueueUrl=queue_url,
-                AttributeNames=['ApproximateNumberOfMessages', 
-                                'ApproximateNumberOfMessagesNotVisible', 
-                                'ApproximateNumberOfMessagesDelayed']
-            )
-            logger.info("SQS queue is available.")
-
-            attrs = response['Attributes']
-            visible = int(attrs.get('ApproximateNumberOfMessages', 0))
-            not_visible = int(attrs.get('ApproximateNumberOfMessagesNotVisible', 0))
-            delayed = int(attrs.get('ApproximateNumberOfMessagesDelayed', 0))
-            total = visible + not_visible + delayed
-
-            logger.info(f"Queue Attributes: Visible: {visible}, Not Visible: {not_visible}, Delayed: {delayed}, Total: {total}")
-
-            if total > 0:
-                logger.info("Messages are available in the queue.")
-                return attrs
-            
-            time.sleep(5)
-            elapsed += 5
-        except Exception as e:
-            logger.error(f"An error occurred while checking queue attributes: {e}")
-            time.sleep(5)
-            elapsed += 5
-    logger.warning("SQS queue did not become available within the expected time frame.")
-    return None           
 
 @task
-def receive_messages():
-    """
-    This task receives messages from the SQS queue and logs the content.
-    """
+def collect_messages(sqs_url, expected_count: int = 21):
+    """Receive, parse, and delete messages after parsing (no timeout)"""
+    sqs = boto3.client("sqs", region_name="us-east-1")
 
-    logger = get_run_logger()
-    sqs = boto3.client('sqs',region_name='us-east-1')
-    all_messages = []
+    collected_data = {}
+    received_ids = set()
 
-    logger.info("Attempting to receive messages from the SQS queue...")
-    start_time = time.time()
-    MAX_wait = 1000
-    while True:
-        try:
-            response = sqs.receive_message(
-                QueueUrl=queue_url,
-                AttributeNames=["All"],
-                MessageAttributeNames=["All"],
-                MaxNumberOfMessages=10,
-                WaitTimeSeconds=5  # short polling
-            )
-            messages = response.get('Messages', [])
+    while len(collected_data) < expected_count:
+        attrs = sqs.get_queue_attributes(
+            QueueUrl=sqs_url,
+            AttributeNames=[
+                "ApproximateNumberOfMessages",
+                "ApproximateNumberOfMessagesNotVisible",
+                "ApproximateNumberOfMessagesDelayed",
+            ],
+        )["Attributes"]
 
-            if not messages:
-                elapsed = time.time() - start_time
-                if elapsed > MAX_wait:
-                    logger.info("No more messages after waiting. Exiting receive loop.")
-                    break
-                else:
-                    logger.info("No messages received yet, waiting...")
+        available = int(attrs.get("ApproximateNumberOfMessages", 0))
+        in_flight = int(attrs.get("ApproximateNumberOfMessagesNotVisible", 0))
+        delayed = int(attrs.get("ApproximateNumberOfMessagesDelayed", 0))
+
+        print(f"\nCollected {len(collected_data)}/{expected_count} messages")
+        print(f"Available: {available}, In-flight: {in_flight}, Delayed: {delayed}")
+
+        if available > 0:
+            try:
+                response = sqs.receive_message(
+                    QueueUrl=sqs_url,
+                    MaxNumberOfMessages=10,
+                    WaitTimeSeconds=5,
+                    VisibilityTimeout=60,
+                    MessageAttributeNames=["All"],
+                )
+
+                messages = response.get("Messages", [])
+                if not messages:
+                    print("No messages returned despite availability. Waiting 5 seconds...")
                     time.sleep(5)
                     continue
 
-            # Process each message
-            for message in messages:
-                attrs = message.get('MessageAttributes', {})
-                order_no = attrs.get('order_no', {}).get('StringValue', 'N/A')
-                word = attrs.get('word', {}).get('StringValue', 'N/A')
+                to_delete = []
 
-                all_messages.append({'order_no': order_no, 'word': word})
+                for msg in messages:
+                    msg_id = msg["MessageId"]
+                    if msg_id in received_ids:
+                        continue
 
-                # Delete message after processing
-                sqs.delete_message(
-                    QueueUrl=queue_url,
-                    ReceiptHandle=message['ReceiptHandle']
-                )
-                logger.info(f"Processed and deleted message: order_no={order_no}, word={word}")
+                    attributes = msg.get("MessageAttributes", {})
+                    if "order_no" in attributes and "word" in attributes:
+                        order_no = attributes["order_no"]["StringValue"]
+                        word = attributes["word"]["StringValue"]
 
-        except Exception as e:
-            logger.error(f"Error receiving messages: {e}")
-            break
+                        collected_data[order_no] = word
+                        received_ids.add(msg_id)
 
-    logger.info(f"Total messages: {len(all_messages)}")
-    return all_messages
+                        to_delete.append({
+                            "Id": msg_id,
+                            "ReceiptHandle": msg["ReceiptHandle"],
+                        })
+
+                        print(f"Received order_no={order_no}, word={word}")
+                    else:
+                        print(f"Message missing expected attributes: {msg}")
+
+                # batch delete the messages after parsing
+                if to_delete:
+                    try:
+                        delete_response = sqs.delete_message_batch(
+                            QueueUrl=sqs_url,
+                            Entries=to_delete,
+                        )
+                        successful = len(delete_response.get("Successful", []))
+                        failed = delete_response.get("Failed", [])
+                        print(f"Batch deleted {successful} messages.")
+                        if failed:
+                            print(f"Failed deletions: {failed}")
+                    except Exception as e:
+                        print(f"Batch delete failed: {e}")
+
+            except Exception as e:
+                print(f"Error receiving messages: {e}")
+                print("Waiting 10 seconds before retrying...")
+                time.sleep(10)
+        else:
+            print("No messages available, waiting 10 seconds...")
+            time.sleep(10)
+
+    print("\nAll messages received, parsed, and deleted")
+    return collected_data
+
 
 @task
-def send_solution(uvaid, phrase, platform):
-    """
-    This function sends the final solution to the specified API endpoint.
-    """
-    logger = get_run_logger()
-    sqs = boto3.client('sqs',region_name='us-east-1')
-    url = "https://sqs.us-east-1.amazonaws.com/440848399208/dp2-submit"
+def reassemble_phrase(collected_data):
+    """Reassemble words into phrase"""
+    try:
+        ordered_phrase = " ".join(
+            collected_data[k] for k in sorted(collected_data, key=lambda x: int(x))
+        )
+    except Exception as e:
+        raise ValueError(f"Error assembling phrase: {e}")
+
+    print(f"\nReassembled phrase:\n{ordered_phrase}")
+    return ordered_phrase
+
+
+@task
+def submit_solution(uvaid, phrase, platform="prefect"):
+    """Send the assembled phrase to the submission queue"""
+    sqs = boto3.client("sqs", region_name="us-east-1")
+    submission_url = "https://sqs.us-east-1.amazonaws.com/440848399208/dp2-submit"
+
     try:
         response = sqs.send_message(
-            QueueUrl=url,
-            MessageBody=phrase,
+            QueueUrl=submission_url,
+            MessageBody="Pipeline submission for DP2",
             MessageAttributes={
-                'uvaid': {
-                    'DataType': 'String',
-                    'StringValue': uvaid
-                },
-                'phrase': {
-                    'DataType': 'String',
-                    'StringValue': phrase
-                },
-                'platform': {
-                    'DataType': 'String',
-                    'StringValue': platform
-                }
-            }
+                "uvaid": {"DataType": "String", "StringValue": uvaid},
+                "phrase": {"DataType": "String", "StringValue": phrase},
+                "platform": {"DataType": "String", "StringValue": platform},
+            },
         )
-        logger.info(f"Solution sent successfully: {response.get('MessageId')}")
+        status_code = response["ResponseMetadata"]["HTTPStatusCode"]
+        if status_code == 200:
+            print("\nSubmission successful (HTTP 200)!")
+            print(f"Submitted message ID: {response.get('MessageId')}")
+            return True
+        else:
+            print(f"\nSubmission returned status code {status_code}")
+            return False
     except Exception as e:
-        logger.error(f"Error sending solution: {e}")
-        return None    
+        print(f"Error submitting solution: {e}")
+        return False
 
-@flow
+
+@flow(name="DP2 Prefect Pipeline")
 def main_flow():
-    uvaid = "vzu3vu"
-    platform = "prefect"
-    payload = populate_data()
-    if payload:
-        get_queue_attributes()
-        messages = receive_messages()
+    sqs_url = populate_queue()
+    collected_data = collect_messages(sqs_url)
+    phrase = reassemble_phrase(collected_data)
+    success = submit_solution("vzu3vu", phrase)
 
-        messages_sorted = sorted(messages, key=lambda x: int(x['order_no']))
-        phrase = " ".join([m['word'] for m in messages_sorted])
-        print(f"Final phrase: {phrase}")
+    if not success:
+        print("Submission failed. Check logs.")
 
-        send_solution(uvaid, phrase, platform)
-        
+
 if __name__ == "__main__":
     main_flow()
+

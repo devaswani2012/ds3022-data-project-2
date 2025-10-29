@@ -28,3 +28,4 @@ logs/          # Airflow DAG logs
 # Docker
 logs
 config
+docker-compose.yaml

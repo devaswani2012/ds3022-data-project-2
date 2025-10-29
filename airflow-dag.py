@@ -65,8 +65,7 @@ def collect_messages(sqs_url: str, expected_count: int = 21):
 
 @task
 def reassemble_phrase(collected_data: dict):
-    return " ".join(collected_data[k] for k in sorted(collected_data, 
-key=lambda x: int(x)))
+    return " ".join(collected_data[k] for k in sorted(collected_data, key=lambda x: int(x)))
 
 @task
 def submit_solution(uva_id: str, phrase: str, platform: str = "airflow"):

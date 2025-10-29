@@ -26,6 +26,6 @@ logs/          # Airflow DAG logs
 *.aws
 
 # Docker
-logs
-config
-docker-compose.yaml
+airflow/logs
+airflow/config
+airflow/docker-compose.yaml

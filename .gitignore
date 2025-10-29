@@ -24,3 +24,7 @@ logs/          # Airflow DAG logs
 # AWS / secrets
 *.env
 *.aws
+
+# Docker
+logs
+config

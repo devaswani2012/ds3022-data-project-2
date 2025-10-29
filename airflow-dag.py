@@ -1,7 +1,7 @@
 # airflow DAG goes here
 
 from airflow.decorators import dag, task
-from airflow.utils.dates import days_ago
+from datetime import datetime
 import boto3
 import requests
 import time
@@ -88,8 +88,8 @@ def submit_solution(uva_id: str, phrase: str, platform: str = "airflow"):
 
 @dag(
     dag_id="dp2_airflow_pipeline",
-    start_date=days_ago(1),
-    schedule_interval=None,
+    start_date=datetime(2025, 10, 29),  # replaced days_ago(1)
+    schedule=None,
     catchup=False,
     tags=["dp2", "airflow"]
 )

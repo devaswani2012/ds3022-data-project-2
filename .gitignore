@@ -3,7 +3,7 @@ __pycache__/
 *.pyc
 *.pyo
 
-# Virtual environment
+# Virtual environments
 env/
 venv/
 .venv/
@@ -11,9 +11,16 @@ venv/
 # macOS
 .DS_Store
 
-# Prefect / Airflow config
+# Prefect
+.prefect/
 *.sqlite
 *.db
-.prefect/
-airflow.db
+logs/          # Prefect or custom logs
 
+# Airflow
+airflow.db
+logs/          # Airflow DAG logs
+
+# AWS / secrets
+*.env
+*.aws
